@@ -2,6 +2,7 @@ from flask import jsonify, Blueprint, abort
 from flask_restful import (Resource, Api, reqparse, inputs,
                            fields, marshal, marshal_with, url_for)
 
+from auth import auth
 import models
 
 course_fields = {
@@ -50,6 +51,7 @@ class CourseList(Resource):
         return {'courses': courses}
 
     @marshal_with(course_fields)
+    @auth.login_required
     def post(self):
         args = self.reqparse.parse_args()
         course = models.Course.create(**args)
@@ -79,6 +81,7 @@ class Course(Resource):
         return add_reviews(course_or_404(id))
 
     @marshal_with(course_fields)
+    @auth.login_required
     def put(self, id):
         args = self.reqparse.parse_args()
         query = models.Course.update(**args).where(models.Course.id == id)
@@ -86,11 +89,11 @@ class Course(Resource):
         return (add_reviews(models.Course.get(models.Course.id == id)), 200,
                 {'Location': url_for('resources.courses.course', id=id)})
 
-    def delete(self):
+    @auth.login_required
+    def delete(self, id):
         query = models.Course.delete().where(models.Course.id == id)
         query.execute()
-        return ('', 204,
-                {'Location': url_for('resources.courses.courses')})
+        return '', 204, {'Location': url_for('resources.courses.courses')}
 
 
 courses_api = Blueprint('resources.courses', __name__)

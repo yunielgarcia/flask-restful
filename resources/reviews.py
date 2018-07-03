@@ -1,29 +1,55 @@
-from flask import jsonify, Blueprint
-from flask_restful import Resource, Api, reqparse, inputs, fields
+from flask import Blueprint, abort, g, make_response
+import json
+
+from flask_restful import (Resource, Api, reqparse, inputs, fields,
+                               url_for, marshal, marshal_with)
 
 import models
+
+from auth import auth
+
+review_fields = {
+    'id': fields.Integer,
+    'for_course': fields.String,
+    'rating': fields.Integer,
+    'comment': fields.String(default=''),
+    'created_at': fields.DateTime
+}
+
+
+def review_or_404(review_id):
+    try:
+        review = models.Review.get(models.Review.id == review_id)
+    except models.Review.DoesNotExist:
+        abort(404)
+    else:
+        return review
+
+
+def add_course(review):
+    review.for_course = url_for('resources.courses.course', id=review.course.id)
+    return review
 
 
 class ReviewList(Resource):
     def __init__(self):
-        self.reqparser = reqparse.RequestParser()
-        self.reqparser.add_argument(
+        self.reqparse = reqparse.RequestParser()
+        self.reqparse.add_argument(
             'course',
             type=inputs.positive,
             required=True,
             help='No course provided',
             location=['form', 'json']
         )
-        self.reqparser.add_argument(
+        self.reqparse.add_argument(
             'rating',
             type=inputs.int_range(1, 5),
             required=True,
             help='No rating provided',
             location=['form', 'json']
         )
-        self.reqparser.add_argument(
+        self.reqparse.add_argument(
             'comment',
-            type=inputs.int_range(1, 5),
             required=False,
             nullable=True,
             location=['form', 'json'],
@@ -32,38 +58,66 @@ class ReviewList(Resource):
         super().__init__()
 
     def get(self):
-        return jsonify({'reviews': [
-            {
-                'course': 1,
-                'rating': 5
-            }
-        ]})
+        return {'reviews': [
+            marshal(add_course(review), review_fields)
+            for review in models.Review.select()
+        ]}
+
+    @marshal_with(review_fields)
+    @auth.login_required
+    def post(self):
+        args = self.reqparse.parse_args()
+        review = models.Review.create(
+            created_by=g.user,
+            **args)
+        return (add_course(review), 201, {
+            'Location': url_for('resources.reviews.review', id=review.id)
+        })
 
 
 class Review(Resource):
-    def get(self):
-        return jsonify(
-            {
-                'course': 1,
-                'rating': 5
-            }
-        )
+    @marshal_with(review_fields)
+    def get(self, id):
+        return add_course(review_or_404(id))
 
-    def put(self):
-        return jsonify(
-            {
-                'course': 1,
-                'rating': 5
-            }
-        )
+    @marshal_with(review_fields)
+    @auth.login_required
+    def put(self, id):
+        args = self.reqparse.parse_args()
+        try:
+            review = models.Review.get(
+                models.Review.id == id,
+                models.Review.create_by == g.user
+            )
+        except models.Review.DoesNotExist:
+            return make_response(
+                json.dumps({
+                    'error': 'That review does not exist or is not editable'
+                }), 403
+            )
+        query = review.update(**args)
+        query.execute()
+        review = add_course(review_or_404(id))
+        return (review, 200, {
+            'Location': url_for('resources.reviews.review', id=id)
+        })
 
-    def delete(self):
-        return jsonify(
-            {
-                'course': 1,
-                'rating': 5
-            }
-        )
+    @auth.login_required
+    def delete(self, id):
+        try:
+            review = models.Review.get(
+                models.Review.id == id,
+                models.Review.create_by == g.user
+            )
+        except models.Review.DoesNotExist:
+            return make_response(
+                json.dumps({
+                    'error': 'That review does not exist or is not editable'
+                }), 403
+            )
+        query = review.delete()
+        query.execute()
+        return '', 204, {'Location': url_for('resources.reviews.reviews')}
 
 
 reviews_api = Blueprint('resources.reviews', __name__)
